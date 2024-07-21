@@ -83,12 +83,7 @@ class task_t {
         if (m_status == status_t::stopped) {
             return false;
         }
-        if (m_period_tick > 0 &&
-            m_timer.elapsed(m_last_run_tick) >= m_period_tick) {
-            return true;
-        }
-        if (m_period_tick < 0 &&
-            m_timer.elapsed(m_last_run_tick) >= -m_period_tick) {
+        if (ticks_left() <= 0) {
             return true;
         }
         return false;
@@ -102,8 +97,10 @@ class task_t {
             return;
         }
 
+        m_exec_time.stop();
+        m_exec_time.start();
         m_status = status_t::running;
-        if (m_period_tick > 0) {
+        if (m_period_tick >= 0) {
             m_last_run_tick = m_timer.now();
         } else {
             m_last_run_tick = m_timer.now() - ticks_left();
@@ -118,11 +115,20 @@ class task_t {
     }
 
     void invalidate() { m_status = status_t::invalid; }
+    void stop() { m_status = status_t::stopped; }
+    void start() {
+        m_status = status_t::paused;
+        m_run_time.reset();
+        m_exec_time.reset();
+        m_exec_time.start();
+    }
 
     operator bool() const { return m_status != status_t::invalid; }
 
     const auto& name() const { return m_name; }
     const auto& period() const { return m_period_tick; }
+    const auto& actual_period() const { return m_exec_time.duration(); }
+    const auto& last_run_tick() const { return m_last_run_tick; }
     const auto& run_time() const { return m_run_time.duration(); }
     auto& run_time() { return m_run_time.duration(); }
     void reset_run_time() { m_run_time.reset(); }
@@ -130,11 +136,25 @@ class task_t {
         if (m_status != status_t::paused) {
             return 0;
         }
+        if (m_period_tick == 0) {
+            return 0;
+        }
         if (m_period_tick < 0) {
-            return -m_period_tick - m_timer.elapsed(m_last_run_tick);
+            if (m_status == status_t::delayed) {
+                return -m_timer.elapsed(m_last_run_tick);
+            }
+            //  return -m_period_tick - m_timer.elapsed(m_last_run_tick);
+            auto current = m_timer.now() % -m_period_tick;
+            if (current < m_prev) {
+                m_prev = current;
+                return -m_timer.elapsed(m_last_run_tick);
+            }
+            m_prev = current;
+            return -m_period_tick - current;
         }
         return m_period_tick - m_timer.elapsed(m_last_run_tick);
     }
+
     const auto status() const {
         if (ticks_left() < 0) {
             return status_t::delayed;
@@ -159,6 +179,7 @@ class task_t {
         m_last_run_tick = other.m_last_run_tick;
         m_status = other.m_status;
         m_run_time = other.m_run_time;
+        m_exec_time = other.m_exec_time;
         return *this;
     }
     task_t(const task_t& other) {
@@ -168,6 +189,7 @@ class task_t {
         m_last_run_tick = other.m_last_run_tick;
         m_status = other.m_status;
         m_run_time = other.m_run_time;
+        m_exec_time = other.m_exec_time;
     }
     task_t(task_t&&) = default;
 
@@ -177,12 +199,15 @@ class task_t {
     std::array<char, 8> m_name{"\0"};
     std::function<bool()> m_callback{nullptr};
     duration_t m_period_tick;
+    duration_t m_actual_period_tick{};
     inner::timer_t& m_timer{inner::timer_t::instance()};
 
     time_t m_last_run_tick{0};
     time_t m_exec_ticks{0};
+    mutable time_t m_prev{0};
 
     inner::stop_watch_t m_run_time;
+    inner::stop_watch_t m_exec_time;
 
     volatile status_t m_status{status_t::invalid};
 };
@@ -237,6 +262,30 @@ class scheduler_t {
             for (auto& task : m_tasks_list[p]) {
                 if (task && std::strncmp(task.name().data(), name, 8) == 0) {
                     task.invalidate();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool start(const char* name) {
+        for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
+            for (auto& task : m_tasks_list[p]) {
+                if (task && std::strncmp(task.name().data(), name, 8) == 0) {
+                    task.start();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool stop(const char* name) {
+        for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
+            for (auto& task : m_tasks_list[p]) {
+                if (task && std::strncmp(task.name().data(), name, 8) == 0) {
+                    task.stop();
                     return true;
                 }
             }
