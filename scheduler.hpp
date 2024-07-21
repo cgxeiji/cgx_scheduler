@@ -244,16 +244,12 @@ class scheduler_t {
         return false;
     }
 
+    const auto& tasks() const { return m_tasks_list; }
+    const auto& watches() const { return m_task_watches; }
+
     void stats(std::function<void(const char*)> print) {
         static int32_t last_lines = 0;
         std::array<char, 128> buf;
-
-        std::snprintf(buf.data(), buf.size(), "%78s\n",
-                      "TOP (q)uit (r)eset_stats (n)ow");
-        print("\033[2K");
-        print("\033[1m");
-        print(buf.data());
-        print("\033[0m");
 
         int32_t lines = 0;
         for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
@@ -280,19 +276,13 @@ class scheduler_t {
                           m_task_watches[p].duration().mean(), min, max);
             std::snprintf(buf.data() + std::strlen(buf.data()), buf.size(),
                           "%*s\n", 78 - std::strlen(buf.data()), "");
-            print("\033[2K");
-            print("\033[30;42m");
             print(buf.data());
-            print("\033[0m");
             lines++;
 
             std::snprintf(buf.data(), buf.size(),
                           "   %10s %12s %12s %12s %12s %12s\n", "task", "every",
                           "next", "mean_us", "min_us", "max_us");
-            print("\033[2K");
-            print("\033[90m");
             print(buf.data());
-            print("\033[0m");
             lines++;
 
             for (const auto& task : m_tasks_list[p]) {
@@ -333,21 +323,16 @@ class scheduler_t {
                               "%2s [%8s] %12lld %12lld %12llu %12llu %12llu\n",
                               state, task.name().data(), task.period(),
                               task.ticks_left(), run_time.mean(), min, max);
-                print("\033[2K");
                 print(buf.data());
-                print("\033[0m");
                 lines++;
             }
-            print("\033[2K");
             print("\n");
             lines++;
         }
 
         for (int32_t i = 0; i < last_lines - lines; ++i) {
-            print("\033[2K");
             print("\n");
         }
-        print("\033[H");
     }
 
     void reset_stats() {
