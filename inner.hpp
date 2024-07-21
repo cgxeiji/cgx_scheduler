@@ -5,7 +5,7 @@
 #include <functional>
 #include <limits>
 
-namespace sch {
+namespace cgx::sch {
 namespace inner {
 
 class timer_t {
@@ -125,4 +125,4 @@ class stop_watch_t {
 };
 
 }  // namespace inner
-}  // namespace sch
+}  // namespace cgx::sch

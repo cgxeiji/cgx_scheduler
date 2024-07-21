@@ -9,7 +9,7 @@
 
 #include "inner.hpp"
 
-namespace sch {
+namespace cgx::sch {
 
 enum class direction_t {
     next,
@@ -117,6 +117,8 @@ class task_t {
         }
     }
 
+    void invalidate() { m_status = status_t::invalid; }
+
     operator bool() const { return m_status != status_t::invalid; }
 
     const auto& name() const { return m_name; }
@@ -212,12 +214,6 @@ class scheduler_t {
             task.run();
         }
         index = (index + 1) % m_tasks_list[priority].size();
-
-        // for (auto& task : m_tasks_list[priority]) {
-        //     if (task && task.is_ready()) {
-        //         task.run();
-        //     }
-        // }
     }
 
     bool add(const char* name, const duration_t period,
@@ -236,11 +232,28 @@ class scheduler_t {
         return false;
     }
 
+    bool pkill(const char* name) {
+        for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
+            for (auto& task : m_tasks_list[p]) {
+                if (task && std::strncmp(task.name().data(), name, 8) == 0) {
+                    task.invalidate();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     void stats(std::function<void(const char*)> print) {
         static int32_t last_lines = 0;
         std::array<char, 128> buf;
-        // print("\033[2J");
-        print("\033[H");
+
+        std::snprintf(buf.data(), buf.size(), "%78s\n",
+                      "TOP (q)uit (r)eset_stats (n)ow");
+        print("\033[2K");
+        print("\033[1m");
+        print(buf.data());
+        print("\033[0m");
 
         int32_t lines = 0;
         for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
@@ -267,6 +280,7 @@ class scheduler_t {
                           m_task_watches[p].duration().mean(), min, max);
             std::snprintf(buf.data() + std::strlen(buf.data()), buf.size(),
                           "%*s\n", 78 - std::strlen(buf.data()), "");
+            print("\033[2K");
             print("\033[30;42m");
             print(buf.data());
             print("\033[0m");
@@ -274,7 +288,8 @@ class scheduler_t {
 
             std::snprintf(buf.data(), buf.size(),
                           "   %10s %12s %12s %12s %12s %12s\n", "task", "every",
-                          "next", "run (us)", "min (us)", "max (us)");
+                          "next", "mean_us", "min_us", "max_us");
+            print("\033[2K");
             print("\033[90m");
             print(buf.data());
             print("\033[0m");
@@ -288,6 +303,7 @@ class scheduler_t {
                 switch (task.status()) {
                     case task_t::status_t::running:
                         state[0] = 'O';
+                        print("\033[1;32m");
                         break;
                     case task_t::status_t::stopped:
                         state[1] = 'S';
@@ -297,6 +313,7 @@ class scheduler_t {
                         break;
                     case task_t::status_t::delayed:
                         state[0] = 'd';
+                        print("\033[31m");
                         break;
                     case task_t::status_t::invalid:
                         state[1] = '-';
@@ -316,7 +333,9 @@ class scheduler_t {
                               "%2s [%8s] %12lld %12lld %12llu %12llu %12llu\n",
                               state, task.name().data(), task.period(),
                               task.ticks_left(), run_time.mean(), min, max);
+                print("\033[2K");
                 print(buf.data());
+                print("\033[0m");
                 lines++;
             }
             print("\033[2K");
@@ -328,6 +347,7 @@ class scheduler_t {
             print("\033[2K");
             print("\n");
         }
+        print("\033[H");
     }
 
     void reset_stats() {
@@ -356,4 +376,4 @@ class scheduler_t {
 
 extern scheduler_t scheduler;
 
-}  // namespace sch
+}  // namespace cgx::sch
