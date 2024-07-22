@@ -41,7 +41,7 @@ class stage_t {
 
     direction_t sleep(const std::size_t ticks) {
         if (!m_is_sleeping) {
-            m_deadline = m_timer.make_deadline(ticks);
+            m_deadline    = m_timer.make_deadline(ticks);
             m_is_sleeping = true;
         }
         if (m_timer.is_expired(m_deadline)) {
@@ -55,17 +55,17 @@ class stage_t {
         : m_stages(stages) {}
 
    private:
-    std::size_t m_index{0};
+    std::size_t                                         m_index{0};
     std::array<std::function<direction_t(stage_t&)>, N> m_stages;
 
-    inner::timer_t& m_timer{inner::timer_t::instance()};
-    bool m_is_sleeping{false};
+    inner::timer_t&        m_timer{inner::timer_t::instance()};
+    bool                   m_is_sleeping{false};
     inner::timer_t::time_t m_deadline{0};
 };
 
 class task_t {
    public:
-    using time_t = inner::timer_t::time_t;
+    using time_t     = inner::timer_t::time_t;
     using duration_t = inner::timer_t::duration_t;
 
     enum class status_t {
@@ -105,8 +105,8 @@ class task_t {
         } else {
             m_last_run_tick = m_timer.now() - ticks_left();
         }
-        auto _watch = m_run_time.measure();
-        const auto keep = m_callback();
+        auto       _watch = m_run_time.measure();
+        const auto keep   = m_callback();
         if (keep) {
             m_status = status_t::paused;
         } else {
@@ -130,9 +130,9 @@ class task_t {
     const auto& actual_period() const { return m_exec_time.duration(); }
     const auto& last_run_tick() const { return m_last_run_tick; }
     const auto& run_time() const { return m_run_time.duration(); }
-    auto& run_time() { return m_run_time.duration(); }
-    void reset_run_time() { m_run_time.reset(); }
-    duration_t ticks_left() const {
+    auto&       run_time() { return m_run_time.duration(); }
+    void        reset_run_time() { m_run_time.reset(); }
+    duration_t  ticks_left() const {
         if (m_status != status_t::paused) {
             return 0;
         }
@@ -167,43 +167,43 @@ class task_t {
            std::function<bool()> callback)
         : m_callback(callback),
           m_period_tick(period),
-          m_status(status_t::paused) {
+          m_status(status_t::running) {
         const auto len = std::strlen(name);
         memcpy(m_name.data(), name, len > 8 ? 8 : len);
     }
 
     task_t& operator=(const task_t& other) {
-        m_name = other.m_name;
-        m_callback = other.m_callback;
-        m_period_tick = other.m_period_tick;
+        m_name          = other.m_name;
+        m_callback      = other.m_callback;
+        m_period_tick   = other.m_period_tick;
         m_last_run_tick = other.m_last_run_tick;
-        m_status = other.m_status;
-        m_run_time = other.m_run_time;
-        m_exec_time = other.m_exec_time;
+        m_status        = other.m_status;
+        m_run_time      = other.m_run_time;
+        m_exec_time     = other.m_exec_time;
         return *this;
     }
     task_t(const task_t& other) {
-        m_name = other.m_name;
-        m_callback = other.m_callback;
-        m_period_tick = other.m_period_tick;
+        m_name          = other.m_name;
+        m_callback      = other.m_callback;
+        m_period_tick   = other.m_period_tick;
         m_last_run_tick = other.m_last_run_tick;
-        m_status = other.m_status;
-        m_run_time = other.m_run_time;
-        m_exec_time = other.m_exec_time;
+        m_status        = other.m_status;
+        m_run_time      = other.m_run_time;
+        m_exec_time     = other.m_exec_time;
     }
     task_t(task_t&&) = default;
 
     ~task_t() = default;
 
    private:
-    std::array<char, 8> m_name{"\0"};
+    std::array<char, 8>   m_name{"\0"};
     std::function<bool()> m_callback{nullptr};
-    duration_t m_period_tick;
-    duration_t m_actual_period_tick{};
-    inner::timer_t& m_timer{inner::timer_t::instance()};
+    duration_t            m_period_tick;
+    duration_t            m_actual_period_tick{};
+    inner::timer_t&       m_timer{inner::timer_t::instance()};
 
-    time_t m_last_run_tick{0};
-    time_t m_exec_ticks{0};
+    time_t         m_last_run_tick{0};
+    time_t         m_exec_ticks{0};
     mutable time_t m_prev{0};
 
     inner::stop_watch_t m_run_time;
@@ -214,7 +214,7 @@ class task_t {
 
 class scheduler_t {
    public:
-    using time_t = inner::timer_t::time_t;
+    using time_t     = inner::timer_t::time_t;
     using duration_t = inner::timer_t::duration_t;
 
     void run(const uint8_t priority = 0) {
@@ -229,8 +229,8 @@ class scheduler_t {
             return;
         }
 
-        auto _watch = m_task_watches[priority].measure();
-        auto& index = m_task_indices[priority];
+        auto  _watch = m_task_watches[priority].measure();
+        auto& index  = m_task_indices[priority];
         while (!m_tasks_list[priority][index]) {
             index = (index + 1) % m_tasks_list[priority].size();
         }
@@ -297,7 +297,7 @@ class scheduler_t {
     const auto& watches() const { return m_task_watches; }
 
     void stats(std::function<void(const char*)> print) {
-        static int32_t last_lines = 0;
+        static int32_t        last_lines = 0;
         std::array<char, 128> buf;
 
         int32_t lines = 0;
@@ -328,9 +328,9 @@ class scheduler_t {
             print(buf.data());
             lines++;
 
-            std::snprintf(buf.data(), buf.size(),
-                          "   %10s %12s %12s %12s %12s %12s\n", "task", "every",
-                          "next", "mean_us", "min_us", "max_us");
+            std::snprintf(
+                buf.data(), buf.size(), "   %10s %12s %12s %12s %12s %12s\n",
+                "task", "every", "next", "mean_us", "min_us", "max_us");
             print(buf.data());
             lines++;
 
@@ -403,9 +403,9 @@ class scheduler_t {
     constexpr static std::size_t m_max_tasks = 10;
 
     using task_list_t = std::array<task_t, m_max_tasks>;
-    std::array<task_list_t, m_max_tasks> m_tasks_list;
+    std::array<task_list_t, m_max_tasks>         m_tasks_list;
     std::array<inner::stop_watch_t, m_max_tasks> m_task_watches;
-    std::array<uint8_t, m_max_tasks> m_task_indices;
+    std::array<uint8_t, m_max_tasks>             m_task_indices;
 };
 
 extern scheduler_t scheduler;
