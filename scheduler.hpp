@@ -221,9 +221,12 @@ class scheduler_t {
         if (priority >= m_tasks_list.size()) {
             return;
         }
-        const auto available_tasks = std::count_if(
-            m_tasks_list[priority].begin(), m_tasks_list[priority].end(),
-            [](const task_t& t) { return bool(t); });
+        auto available_tasks = 0;
+        for (const auto& task : m_tasks_list[priority]) {
+            if (task) {
+                available_tasks++;
+            }
+        }
 
         if (available_tasks == 0) {
             return;
@@ -302,9 +305,12 @@ class scheduler_t {
 
         int32_t lines = 0;
         for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
-            const auto available_tasks =
-                std::count_if(m_tasks_list[p].begin(), m_tasks_list[p].end(),
-                              [](const task_t& t) { return bool(t); });
+            auto available_tasks = 0;
+            for (const auto& task : m_tasks_list[p]) {
+                if (task) {
+                    available_tasks++;
+                }
+            }
 
             if (available_tasks == 0) {
                 continue;
