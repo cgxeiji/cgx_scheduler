@@ -83,7 +83,8 @@ class task_t {
         if (m_status == status_t::stopped) {
             return false;
         }
-        if (ticks_left() <= 0) {
+        m_ticks_left = _ticks_left();
+        if (m_ticks_left <= 0) {
             return true;
         }
         return false;
@@ -139,20 +140,7 @@ class task_t {
         if (m_period_tick == 0) {
             return 0;
         }
-        if (m_period_tick < 0) {
-            if (m_status == status_t::delayed) {
-                return -m_timer.elapsed(m_last_run_tick);
-            }
-            //  return -m_period_tick - m_timer.elapsed(m_last_run_tick);
-            auto current = m_timer.now() % -m_period_tick;
-            if (current < m_prev) {
-                m_prev = current;
-                return -m_timer.elapsed(m_last_run_tick);
-            }
-            m_prev = current;
-            return -m_period_tick - current;
-        }
-        return m_period_tick - m_timer.elapsed(m_last_run_tick);
+        return m_ticks_left;
     }
 
     const auto status() const {
@@ -196,20 +184,201 @@ class task_t {
     ~task_t() = default;
 
    private:
-    std::array<char, 8>   m_name{"\0"};
+    std::array<char, 9> m_name{"\0"};
     std::function<bool()> m_callback{nullptr};
     duration_t            m_period_tick;
     duration_t            m_actual_period_tick{};
     inner::timer_t&       m_timer{inner::timer_t::instance()};
 
-    time_t         m_last_run_tick{0};
-    time_t         m_exec_ticks{0};
+    mutable duration_t m_ticks_left{};
+    volatile time_t m_last_run_tick{0};
+    time_t m_exec_ticks{0};
     mutable time_t m_prev{0};
 
     inner::stop_watch_t m_run_time;
     inner::stop_watch_t m_exec_time;
 
     volatile status_t m_status{status_t::invalid};
+
+    duration_t _ticks_left() const {
+        if (m_period_tick < 0) {
+            if (m_status == status_t::delayed) {
+                return -m_timer.elapsed(m_last_run_tick);
+            }
+            //  return -m_period_tick - m_timer.elapsed(m_last_run_tick);
+            auto current = m_timer.now() % -m_period_tick;
+            if (current < m_prev) {
+                m_prev = current;
+                return -m_timer.elapsed(m_last_run_tick);
+            }
+            m_prev = current;
+            return -m_period_tick - current;
+        }
+        return m_period_tick - m_timer.elapsed(m_last_run_tick);
+    }
+};
+
+class thread_t {
+   public:
+    virtual void run() noexcept = 0;
+    virtual bool add(const task_t& task) noexcept = 0;
+    virtual bool pkill(const char* name) noexcept = 0;
+    virtual bool start(const char* name) noexcept = 0;
+    virtual bool stop(const char* name) noexcept = 0;
+    virtual void reset_stats() noexcept = 0;
+
+    virtual const inner::stop_watch_t& watch() const noexcept = 0;
+
+    virtual std::size_t size() const noexcept { return 0; }
+
+    virtual const task_t* begin() const noexcept = 0;
+    virtual task_t* begin() noexcept = 0;
+    virtual const task_t* end() const noexcept = 0;
+    virtual task_t* end() noexcept = 0;
+
+    virtual void lock() const noexcept = 0;
+    virtual void unlock() const noexcept = 0;
+
+    void safe(std::function<void(thread_t*)> cb) {
+        this->lock();
+        cb(this);
+        this->unlock();
+    }
+
+    virtual ~thread_t() = default;
+};
+
+template <std::size_t N>
+class thread : public thread_t {
+   public:
+    void run() noexcept final {
+        if (this->size() == 0) {
+            return;
+        }
+
+        this->lock();
+
+        auto _watch = m_watch.measure();
+        while (!m_tasks_list[m_index]) {
+            m_index = (m_index + 1) % N;
+        }
+        auto& task = m_tasks_list[m_index];
+        if (task.is_ready()) {
+            task.run();
+        }
+        m_index = (m_index + 1) % N;
+
+        this->unlock();
+    }
+
+    std::size_t size() const noexcept final {
+        this->lock();
+        std::size_t count{0};
+        for (const auto& task : m_tasks_list) {
+            if (task) {
+                count++;
+            }
+        }
+        this->unlock();
+        return count;
+    }
+
+    bool add(const task_t& task) noexcept final {
+        this->lock();
+        for (auto& t : m_tasks_list) {
+            if (!t) {
+                t = task;
+                this->unlock();
+                return true;
+            }
+        }
+        this->unlock();
+        return false;
+    }
+
+    bool pkill(const char* name) noexcept final {
+        this->lock();
+        for (auto& task : m_tasks_list) {
+            if (task && std::strncmp(task.name().data(), name, 8) == 0) {
+                task.invalidate();
+                this->unlock();
+                return true;
+            }
+        }
+        this->unlock();
+        return false;
+    }
+
+    bool start(const char* name) noexcept final {
+        this->lock();
+        for (auto& task : m_tasks_list) {
+            if (task && std::strncmp(task.name().data(), name, 8) == 0) {
+                task.start();
+                this->unlock();
+                return true;
+            }
+        }
+        this->unlock();
+        return false;
+    }
+
+    bool stop(const char* name) noexcept final {
+        this->lock();
+        for (auto& task : m_tasks_list) {
+            if (task && std::strncmp(task.name().data(), name, 8) == 0) {
+                task.stop();
+                this->unlock();
+                return true;
+            }
+        }
+        this->unlock();
+        return false;
+    }
+
+    void reset_stats() noexcept final {
+        this->lock();
+        for (auto& task : m_tasks_list) {
+            task.reset_run_time();
+        }
+        m_watch.reset();
+        this->unlock();
+    }
+
+    const inner::stop_watch_t& watch() const noexcept final { return m_watch; }
+
+    const task_t* begin() const noexcept final { return m_tasks_list.data(); }
+    task_t* begin() noexcept final { return m_tasks_list.data(); }
+    const task_t* end() const noexcept final {
+        return m_tasks_list.data() + m_tasks_list.size();
+    }
+    task_t* end() noexcept final {
+        return m_tasks_list.data() + m_tasks_list.size();
+    }
+
+    void set_lock_unlock_cb(std::function<void()> lock_cb,
+                            std::function<void()> unlock_cb) {
+        m_lock_cb = lock_cb;
+        m_unlock_cb = unlock_cb;
+    }
+
+    void lock() const noexcept final {
+        if (m_lock_cb) {
+            m_lock_cb();
+        }
+    }
+    void unlock() const noexcept final {
+        if (m_unlock_cb) {
+            m_unlock_cb();
+        }
+    }
+
+   private:
+    std::array<task_t, N> m_tasks_list;
+    inner::stop_watch_t m_watch;
+    std::size_t m_index{0};
+
+    std::function<void()> m_lock_cb{nullptr};
+    std::function<void()> m_unlock_cb{nullptr};
 };
 
 class scheduler_t {
@@ -217,186 +386,65 @@ class scheduler_t {
     using time_t     = inner::timer_t::time_t;
     using duration_t = inner::timer_t::duration_t;
 
-    void run(const uint8_t priority = 0) {
-        if (priority >= m_tasks_list.size()) {
+    template <typename T>
+    using observer_ptr = T*;
+
+    void run(const uint8_t thread = 0) {
+        if (thread >= m_threads.size()) {
             return;
         }
-        auto available_tasks = 0;
-        for (const auto& task : m_tasks_list[priority]) {
-            if (task) {
-                available_tasks++;
-            }
-        }
-
-        if (available_tasks == 0) {
-            return;
-        }
-
-        auto  _watch = m_task_watches[priority].measure();
-        auto& index  = m_task_indices[priority];
-        while (!m_tasks_list[priority][index]) {
-            index = (index + 1) % m_tasks_list[priority].size();
-        }
-        auto& task = m_tasks_list[priority][index];
-        if (task.is_ready()) {
-            task.run();
-        }
-        index = (index + 1) % m_tasks_list[priority].size();
+        m_threads[thread]->run();
     }
 
-    bool add(const char* name, const duration_t period,
-             std::function<bool()> cb, const uint8_t priority = 0) {
-        if (priority >= m_tasks_list.size()) {
+    bool add(observer_ptr<thread_t> thread) {
+        for (auto& t : m_threads) {
+            if (!t) {
+                t = thread;
+                return true;
+            }
+        }
+        return false;
+    }
+    bool add(const task_t& task, const uint8_t thread = 0) {
+        if (thread >= m_threads.size()) {
             return false;
         }
-        task_t task{name, period, cb};
+        return m_threads[thread]->add(task);
+    }
 
-        for (auto& t : m_tasks_list[priority]) {
-            if (!t) {
-                t = task;
+    bool pkill(const char* name) {
+        for (auto& t : m_threads) {
+            if (t && t->pkill(name)) {
                 return true;
             }
         }
         return false;
     }
 
-    bool pkill(const char* name) {
-        for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
-            for (auto& task : m_tasks_list[p]) {
-                if (task && std::strncmp(task.name().data(), name, 8) == 0) {
-                    task.invalidate();
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
     bool start(const char* name) {
-        for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
-            for (auto& task : m_tasks_list[p]) {
-                if (task && std::strncmp(task.name().data(), name, 8) == 0) {
-                    task.start();
-                    return true;
-                }
+        for (auto& t : m_threads) {
+            if (t && t->start(name)) {
+                return true;
             }
         }
         return false;
     }
 
     bool stop(const char* name) {
-        for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
-            for (auto& task : m_tasks_list[p]) {
-                if (task && std::strncmp(task.name().data(), name, 8) == 0) {
-                    task.stop();
-                    return true;
-                }
+        for (auto& t : m_threads) {
+            if (t && t->stop(name)) {
+                return true;
             }
         }
         return false;
     }
 
-    const auto& tasks() const { return m_tasks_list; }
-    const auto& watches() const { return m_task_watches; }
-
-    void stats(std::function<void(const char*)> print) {
-        static int32_t        last_lines = 0;
-        std::array<char, 128> buf;
-
-        int32_t lines = 0;
-        for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
-            auto available_tasks = 0;
-            for (const auto& task : m_tasks_list[p]) {
-                if (task) {
-                    available_tasks++;
-                }
-            }
-
-            if (available_tasks == 0) {
-                continue;
-            }
-
-            const auto min = m_task_watches[p].duration().min() ==
-                                     std::numeric_limits<time_t>::max()
-                                 ? 0
-                                 : m_task_watches[p].duration().min();
-            const auto max = m_task_watches[p].duration().max() ==
-                                     std::numeric_limits<time_t>::lowest()
-                                 ? 0
-                                 : m_task_watches[p].duration().max();
-            std::snprintf(buf.data(), buf.size(),
-                          "== PRIORITY %2u == [ tasks: %-2u, mean: %lluus, "
-                          "min: %lluus, max: %lluus ]",
-                          p, available_tasks,
-                          m_task_watches[p].duration().mean(), min, max);
-            std::snprintf(buf.data() + std::strlen(buf.data()), buf.size(),
-                          "%*s\n", 78 - std::strlen(buf.data()), "");
-            print(buf.data());
-            lines++;
-
-            std::snprintf(
-                buf.data(), buf.size(), "   %10s %12s %12s %12s %12s %12s\n",
-                "task", "every", "next", "mean_us", "min_us", "max_us");
-            print(buf.data());
-            lines++;
-
-            for (const auto& task : m_tasks_list[p]) {
-                if (!task) {
-                    continue;
-                }
-                char state[3] = "  ";
-                switch (task.status()) {
-                    case task_t::status_t::running:
-                        state[0] = 'O';
-                        print("\033[1;32m");
-                        break;
-                    case task_t::status_t::stopped:
-                        state[1] = 'S';
-                        break;
-                    case task_t::status_t::paused:
-                        state[1] = 'p';
-                        break;
-                    case task_t::status_t::delayed:
-                        state[0] = 'd';
-                        print("\033[31m");
-                        break;
-                    case task_t::status_t::invalid:
-                        state[1] = '-';
-                        break;
-                }
-                const auto run_time = task.run_time();
-                const auto min =
-                    run_time.min() == std::numeric_limits<time_t>::max()
-                        ? 0
-                        : run_time.min();
-                const auto max =
-                    run_time.max() == std::numeric_limits<time_t>::lowest()
-                        ? 0
-                        : run_time.max();
-
-                std::snprintf(buf.data(), buf.size(),
-                              "%2s [%8s] %12lld %12lld %12llu %12llu %12llu\n",
-                              state, task.name().data(), task.period(),
-                              task.ticks_left(), run_time.mean(), min, max);
-                print(buf.data());
-                lines++;
-            }
-            print("\n");
-            lines++;
-        }
-
-        for (int32_t i = 0; i < last_lines - lines; ++i) {
-            print("\n");
-        }
-    }
+    const auto& threads() const { return m_threads; }
 
     void reset_stats() {
-        for (uint8_t p = 0; p < m_tasks_list.size(); ++p) {
-            auto& tasks = m_tasks_list[p];
-            m_task_watches[p].reset();
-
-            for (auto& task : tasks) {
-                task.reset_run_time();
+        for (auto& t : m_threads) {
+            if (t) {
+                t->reset_stats();
             }
         }
     }
@@ -406,12 +454,7 @@ class scheduler_t {
     }
 
    private:
-    constexpr static std::size_t m_max_tasks = 10;
-
-    using task_list_t = std::array<task_t, m_max_tasks>;
-    std::array<task_list_t, m_max_tasks>         m_tasks_list;
-    std::array<inner::stop_watch_t, m_max_tasks> m_task_watches;
-    std::array<uint8_t, m_max_tasks>             m_task_indices;
+    std::array<observer_ptr<thread_t>, 8> m_threads{nullptr};
 };
 
 extern scheduler_t scheduler;
